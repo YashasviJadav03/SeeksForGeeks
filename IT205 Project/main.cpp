@@ -1,243 +1,334 @@
 #include <iostream>
-#include <cstdlib>
 #include <chrono>
 #include <thread>
 #include <utility>
 #include <deque>
 #include <vector>
-using namespace std::chrono;
+#include <mutex>
+#include <atomic>
+#include <random>
+#include <algorithm>
+#include <limits>
+
 using namespace std;
-const int M = 100; //Capacity of the stadium
-const int N = 10; //Number of entry gates
-const int p = 1; //mins it takes for a single spectator to enter any gate
+using namespace std::chrono;
 
-class Counter{
-    int Done;
-    int count_VIP;
+const int M = 10; // Total people
+const int N = 2;  // Gates
+const int p = 1;  // Logical minutes per person (simulated)
+
+// ================= COUNTER =================
+class Counter
+{
+    atomic<int> Done;
+
 public:
-    Counter() : Done(0), count_VIP(0) {};
-    
-    void increase (){
-        Done++;
-    }
-    
-    void increse_VIP(){
-        count_VIP++;
-    }
-    
-    int isEmpty(){
-        return ( Done >= ( M - count_VIP ) ) ? 1 : 0;
-    }
-    void displayvip(){
-        cout<<count_VIP;
+    atomic<int> count_VIP;
+
+    Counter() : Done(0), count_VIP(0) {}
+
+    void increase() { Done.fetch_add(1, memory_order_relaxed); }
+
+    bool isEmpty()
+    {
+        return Done.load() >= (M - count_VIP.load());
     }
 };
 
-//Calculate the time passed since the opening of entry gates
-class Stopwatch{
-    time_point <high_resolution_clock> start;
+// ================= STOPWATCH =================
+class Stopwatch
+{
+    time_point<high_resolution_clock> start;
+
 public:
-    Stopwatch() : start ( high_resolution_clock::now() ) {}
-    
-    long ElapsedMinutes(){
-        return duration_cast<minutes>( high_resolution_clock::now() - start ).count();
+    Stopwatch() : start(high_resolution_clock::now()) {}
+
+    long elapsedSeconds()
+    {
+        return duration_cast<seconds>(high_resolution_clock::now() - start).count();
+    }
+
+    long currentMinutes()
+    {
+        return elapsedSeconds(); // 1 second = 1 simulated minute
     }
 };
 
-//Function to check if the serial number is a VIP
-int HashFunction ( int Serial_No ){
-    return ( !(Serial_No % (M/8)) ) ? 1 : 0;
+// ================= VIP CHECK =================
+int HashFunction(int s)
+{
+    int divisor = max(10, M); // Rare VIPs (~10%)
+    return !(s % divisor);
 }
 
-//Initializes the pair
-void CreateSerialNo ( pair<short int, int> (&SerialStat)[M], Counter& counter ){
-    for ( int i = 0 ; i < M ; i++ ){
-        SerialStat[i].first = 0;
-        if ( HashFunction(i) ){
-            counter.increse_VIP();
+// ================= INIT =================
+void CreateSerialNo(pair<short, int> (&SerialStat)[M],
+                    Counter &counter,
+                    long arrival_time[M],
+                    long entry_time[M])
+{
+
+    for (int i = 0; i < M; i++)
+    {
+        SerialStat[i] = {0, -1};
+        arrival_time[i] = -1;
+        entry_time[i] = -1;
+
+        if (HashFunction(i))
+        {
+            counter.count_VIP++;
+            SerialStat[i].first = 2; // VIP enters immediately
+            arrival_time[i] = 0;
+            entry_time[i] = 0;
         }
     }
 }
 
-//Function to randomly assign M/2 people to the entry gates
-void AssignRandomGate ( pair<short int, int> (&SerialStat)[M], deque<int> (&Queue)[N] ){
-   // srand ( (unsigned int) ( time(0) ) );
-    for ( int i = 0 ; i < M/2 ; i++ ){
-        int gate = rand() % N;
-        int serial;
-        do{
-            serial = rand() % M;
-            if ( !HashFunction(serial) ){
-                if ( !SerialStat[serial].first )
-                    break;
-            }
-        } while(true);
-        Queue[gate].push_front(serial);
-        SerialStat[serial].first = 1;
+// ================= RANDOM INITIAL ASSIGNMENT =================
+void AssignRandomGate(pair<short, int> (&SerialStat)[M],
+                      deque<int> (&Queue)[N],
+                      mutex gate_mutex[N])
+{
+
+    mt19937 rng(42);
+    uniform_int_distribution<int> gate_dist(0, N - 1);
+    uniform_int_distribution<int> serial_dist(0, M - 1);
+
+    int assigned = 0;
+    while (assigned < M / 2)
+    {
+        int s = serial_dist(rng);
+        if (SerialStat[s].first == 0)
+        {
+            int g = gate_dist(rng);
+            lock_guard<mutex> lock(gate_mutex[g]);
+            Queue[g].push_back(s);
+            SerialStat[s] = {1, g};
+            assigned++;
+        }
     }
-    
 }
 
-//Function to minimize the time for entry of the first M/2 randomly assigned people
-void Distribute ( deque<int> (&Queue)[N] ){
-    long limit = M/N, extra = 0, data, shift;
-    vector <int> reshuff;
-    for ( int i = 0 ; i < N ; i++ ){
-        if ( Queue[i].size() > limit ){
-            shift = Queue[i].size() - limit;
-            extra += shift;
-            while ( shift ){
-                reshuff.push_back(Queue[i].front());
+// ================= LOAD BALANCING =================
+void Distribute(deque<int> (&Queue)[N], mutex gate_mutex[N])
+{
+    long limit = M / N;
+    vector<int> buffer;
+
+    for (int i = 0; i < N; i++)
+    {
+        lock_guard<mutex> lock(gate_mutex[i]);
+        while ((long)Queue[i].size() > limit)
+        {
+            buffer.push_back(Queue[i].front());
+            Queue[i].pop_front();
+        }
+    }
+
+    for (int i = 0; i < N && !buffer.empty(); i++)
+    {
+        lock_guard<mutex> lock(gate_mutex[i]);
+        while ((long)Queue[i].size() < limit && !buffer.empty())
+        {
+            Queue[i].push_back(buffer.back());
+            buffer.pop_back();
+        }
+    }
+}
+
+// ================= FIND BEST GATE =================
+int FindBestGate(deque<int> (&Queue)[N], mutex gate_mutex[N])
+{
+    int best = 0;
+    size_t min_size = numeric_limits<size_t>::max();
+
+    for (int i = 0; i < N; i++)
+    {
+        lock_guard<mutex> lock(gate_mutex[i]);
+        if (Queue[i].size() < min_size)
+        {
+            min_size = Queue[i].size();
+            best = i;
+        }
+    }
+    return best;
+}
+
+// ================= AUTO DEQUEUE =================
+void AutoDequeue(deque<int> (&Queue)[N],
+                 pair<short, int> (&SerialStat)[M],
+                 Counter &counter,
+                 mutex gate_mutex[N],
+                 atomic<bool> &stop_flag,
+                 long entry_time[M],
+                 Stopwatch &timer)
+{
+
+    while (!stop_flag && !counter.isEmpty())
+    {
+        this_thread::sleep_for(seconds(1)); // responsive simulation
+
+        for (int i = 0; i < N; i++)
+        {
+            lock_guard<mutex> lock(gate_mutex[i]);
+            if (!Queue[i].empty())
+            {
+                int s = Queue[i].front();
                 Queue[i].pop_front();
-                shift--;
-            }
-        }
-    }
-    for ( int i = 0 ; i < N ; i++ ){
-        if ( Queue[i].size() < limit ){
-            data = limit - Queue[i].size();
-            if ( extra > data ){
-                extra -= data;
-                while ( data ){
-                    Queue[i].push_front(reshuff.back());
-                    reshuff.pop_back();
-                    data--;
-                }
-            }
-            else{
-                while ( extra ){
-                    Queue[i].push_front( reshuff.back() );
-                    reshuff.pop_back();
-                    extra--;
-                }
-                break;
-            }
-            if ( extra <= 0 )
-                break;
-        }
-    }
-}
-
-//Function to suggest the least waiting time
-void Suggestion ( deque<int> (&Queue)[N] ){
-    long min = Queue[0].size();
-    for ( int i = 1 ; i < N ; i++ ){
-        if ( Queue[i].size() <= min )
-            min = Queue[i].size();
-    }
-    cout << "Least waiting time is: " << p*min << " minutes" << endl << flush;
-    cout << "Following queue numbers have the least waiting time as of now:" << endl << flush;
-    for ( int i = 0 ; i < N ; i++ ){
-        if ( min == Queue[i].size() )
-            cout << i + 1 << " ";
-    }
-    cout << endl << "You can choose from queue number 1 to " << N << endl << flush;
-}
-
-//Function to delete a particular serial number from a queue
-void Delete ( deque<int> (&Queue)[N], int Gate, int Serial_No ){
-    for ( size_t i = 0 ; i < Queue[Gate].size() ; ++i ){
-        if ( Queue[Gate][i] == Serial_No ){
-            auto it = Queue[Gate].begin() + i;
-            Queue[Gate].erase(it);
-        }
-    }
-}
-
-//Function to automatically dequeue people into the stadium
-void AutoDequeue ( deque<int> (&Queue)[N], pair<short int, int> (&SerialStat)[M], Counter& counter ){
-    while ( !counter.isEmpty() ){
-        this_thread::sleep_for(minutes(p));
-        for ( int i = 0 ; i < N ; i++ ){
-            if ( Queue[i].size() ){
-                SerialStat[Queue[i].back()].first = 2;
-                Queue[i].pop_back();
+                SerialStat[s].first = 2;
+                entry_time[s] = timer.currentMinutes();
                 counter.increase();
             }
         }
     }
 }
 
-int main() {
-    pair<short int, int> SerialStat[M];
+// ================= MAIN =================
+int main()
+{
+    pair<short, int> SerialStat[M];
     deque<int> Queue[N];
-    int sr_num;
-    int queue_num;
-    Counter counter;
-    CreateSerialNo(SerialStat, counter);
-    AssignRandomGate(SerialStat, Queue);
-    Distribute(Queue);
-    Stopwatch stat;
-    thread t(AutoDequeue, std::ref(Queue), std::ref(SerialStat), std::ref(counter));
-    t.detach();
-    while(true){
-        while(true){
-            cout << "Welcome to the Entry Queue Management System!" << endl << flush;
-            cout << "Please enter your 7-digit serial number: " << flush;
-            if ( cin >> sr_num ){
-                sr_num -= 1000000;
-                cout << endl;
-                if ( sr_num >= 0 && sr_num < M ){
-                    if ( SerialStat[sr_num].first == 0 ){
-                        if ( HashFunction(sr_num) ){
-                            cout << "Welcome, VIP! You will be directed to our exclusive entry gate." << endl << endl << endl << flush;
-                            SerialStat[sr_num].first = 2;
-                        }
-                        else{
-                            SerialStat[sr_num].first = 1;
-                            cout << "Here are the recommended entry gates based on the current wait time:" << endl << flush;
-                            Suggestion(Queue);
-                            cout << "Please enter your preferred entry gate number: " << flush;
-                            cin >> queue_num;
-                            cout << endl;
-                            while ( queue_num <= 0 || queue_num > N ){
-                                cout << "Oops! Please enter a gate number between 1 and " << N << ": " << flush;
-                                cin >> queue_num;
-                            }
-                            SerialStat[sr_num].second = queue_num - 1;
-                            Queue[queue_num - 1].push_front(sr_num);
-                            //displayassigned(Queue);
-                        }
-                    }
-                    else if ( SerialStat[sr_num].first == 1 ){
-                        cout << "It looks like you're already in a queue. Do you wish to switch to a different gate?" << endl << flush;
-                        cout << "Here are the recommended entry gates based on the current wait time:" << endl << flush;
-                        Suggestion(Queue);
-                        cout << "Please enter your preferred entry gate number: " << flush;
-                        cin >> queue_num;
-                        while ( queue_num <= 0 || queue_num > N ){
-                            cout << "Oops! Please enter a gate number between 1 and " << N << ": " << flush;
-                            cin >> queue_num;
-                        }
-                        Delete(Queue, SerialStat[sr_num].second, sr_num);
-                        SerialStat[sr_num].second = queue_num - 1;
-                        Queue[queue_num - 1].push_front(sr_num);
-                        cout << "Your queue has been updated. You are now in the queue for Gate " << queue_num << "." << endl << endl << endl << flush;
+    mutex gate_mutex[N];
+    atomic<bool> stop_flag(false);
+    long arrival_time[M], entry_time[M];
 
-                    }
-                    else{
-                        cout << "You have already entered the stadium. Re-entry is not permitted." << endl << endl << endl << flush;
-                    }
-                    break;
-                }
-                else
-                {
-                    cout << "The serial number you entered is invalid. Please try again with a valid 7-digit serial number." << endl << endl << endl << flush;
-                    continue;
-                }
-            }
-            else{
-                cin.clear();
-                cout << "We couldn't understand your input. Please make sure to enter a 7-digit serial number." << endl << endl << endl << flush;
-            }
-        }
-        
-        if ( counter.isEmpty() ){
+    Counter counter;
+    Stopwatch timer;
+
+    CreateSerialNo(SerialStat, counter, arrival_time, entry_time);
+    AssignRandomGate(SerialStat, Queue, gate_mutex);
+    Distribute(Queue, gate_mutex);
+
+    cout << "===== ENTRY QUEUE MANAGEMENT SYSTEM =====\n";
+    cout << "Simulation started (1 second = 1 minute)\n";
+    cout << "Enter serials between 1000000 and " << (1000000 + M - 1) << "\n";
+    cout << "Press Ctrl+Z (Windows) to stop manual input\n\n"
+         << flush;
+
+    thread worker(AutoDequeue,
+                  ref(Queue),
+                  ref(SerialStat),
+                  ref(counter),
+                  gate_mutex,
+                  ref(stop_flag),
+                  entry_time,
+                  ref(timer));
+    // ================= MANUAL INPUT LOOP =================
+    while (true)
+    {
+        int sr;
+        cout << "\n----------------------------------\n";
+        cout << "Welcome to the Entry Queue Management System!\n";
+        cout << "Please enter your 7-digit serial number: " << flush;
+
+        if (!(cin >> sr))
             break;
-        }
-        else
+
+        sr -= 1000000;
+
+        if (sr < 0 || sr >= M)
+        {
+            cout << "Invalid serial number. Please try again.\n";
             continue;
+        }
+
+        // Case 1: Already entered
+        if (SerialStat[sr].first == 2)
+        {
+            cout << "You have already entered the stadium. Re-entry not allowed.\n";
+            continue;
+        }
+
+        // Case 2: Already in queue
+        if (SerialStat[sr].first == 1)
+        {
+            cout << "You are already in a queue at Gate "
+                 << (SerialStat[sr].second + 1) << ".\n";
+            cout << "Queue switching is currently disabled in auto-mode.\n";
+            continue;
+        }
+
+        // Case 3: VIP
+        if (HashFunction(sr))
+        {
+            cout << "VIP detected! You may enter immediately.\n";
+            arrival_time[sr] = timer.currentMinutes();
+            entry_time[sr] = arrival_time[sr];
+            SerialStat[sr].first = 2;
+            continue;
+        }
+
+        // Case 4: Normal arrival
+        arrival_time[sr] = timer.currentMinutes();
+
+        // Snapshot queue sizes for suggestion
+        vector<size_t> snapshot(N);
+        for (int i = 0; i < N; i++)
+        {
+            lock_guard<mutex> lock(gate_mutex[i]);
+            snapshot[i] = Queue[i].size();
+        }
+
+        size_t min_q = *min_element(snapshot.begin(), snapshot.end());
+
+        cout << "Estimated waiting time: "
+             << max<size_t>(1, min_q) * p << " minutes\n";
+
+        cout << "Recommended gate(s): ";
+        for (int i = 0; i < N; i++)
+            if (snapshot[i] == min_q)
+                cout << (i + 1) << " ";
+        cout << "\n";
+
+        int g = FindBestGate(Queue, gate_mutex);
+
+        SerialStat[sr] = {1, g};
+        {
+            lock_guard<mutex> lock(gate_mutex[g]);
+            Queue[g].push_back(sr);
+        }
+
+        cout << "You have been assigned to Gate " << (g + 1) << ".\n";
     }
-    cout << "All spectators have been processed. Total processing time: " << stat.ElapsedMinutes() << " minutes." << endl << flush;
-        return 0;
+
+    // ================= AUTO-ASSIGN REMAINING ARRIVALS =================
+    for (int i = 0; i < M; i++)
+    {
+        if (SerialStat[i].first == 0)
+        {
+            arrival_time[i] = timer.currentMinutes();
+            int g = FindBestGate(Queue, gate_mutex);
+            SerialStat[i] = {1, g};
+            lock_guard<mutex> lock(gate_mutex[g]);
+            Queue[g].push_back(i);
+        }
+    }
+
+    // ================= WAIT FOR ALL TO ENTER =================
+    while (!counter.isEmpty())
+    {
+        this_thread::sleep_for(milliseconds(100));
+    }
+
+    stop_flag = true;
+    worker.join();
+
+    // ================= METRICS =================
+    long total_wait = 0, max_wait = 0, count = 0;
+    for (int i = 0; i < M; i++)
+    {
+        if (arrival_time[i] >= 0 && entry_time[i] >= 0)
+        {
+            long w = entry_time[i] - arrival_time[i];
+            total_wait += w;
+            max_wait = max(max_wait, w);
+            count++;
+        }
+    }
+
+    cout << "\n===== METRICS =====\n";
+    cout << "Average wait: " << (count ? total_wait / count : 0) << " minutes\n";
+    cout << "Max wait: " << max_wait << " minutes\n";
+    cout << "Total time: " << timer.elapsedSeconds() << " seconds\n";
+    cout << "===================\n";
 }
