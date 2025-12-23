@@ -1,145 +1,204 @@
-<h2>ENTRY QUEUE MANAGEMENT SYSTEM</h2> 
-<h4>PROJECT ID: P3</h4> 
+# 🏟️ ENTRY QUEUE MANAGEMENT SYSTEM
 
-<h4>TEAM MEMBERS : </h4>
-1. Jiya Patel - 202301034<br /> 
-2. Hiya Modi - 202301011<br /> 
-3. Yashasvi Jadav - 202301069<br /> 
-4. Kavya Parmar - 202301085<br /> 
+**PROJECT ID:** P3  
 
-<h4>TEAM ID: SeeksForGeeks </h4>
+## 👥 TEAM MEMBERS
+- Jiya Patel – 202301034  
+- Hiya Modi – 202301011  
+- Yashasvi Jadav – 202301069  
+- Kavya Parmar – 202301085  
 
-### 🧠 Efficiency & Data Structure Rationale
-
-This system is designed for high efficiency and responsiveness in managing large crowds across multiple entry gates. To achieve this, we carefully selected data structures that balance performance, flexibility, and real-time adaptability.
+**TEAM ID:** SeeksForGeeks  
 
 ---
 
-#### ✅ Key Data Structures Used
+## 🧠 Efficiency & Data Structure Rationale
 
-- **Array of Deques (deque<int> Queue[N])**  
-  Each entry gate is represented by a separate deque.
+This project simulates and optimizes crowd entry into a stadium with multiple entry gates.  
+The system is designed to **minimize total entry time** while ensuring **thread safety, scalability, and accurate performance measurement**.
 
-  **Why deque?**
-  - Supports O(1) insertion and deletion at both ends — ideal for fast reshuffling and dequeuing.
-  - Provides random access, enabling spectators to switch gates efficiently.
-  - Dynamically adjusts to queue size without reallocations, unlike arrays or vectors.
-
-- **Array of Pairs (pair<short int, int> SerialStat[M])**  
-  Stores status and gate assignment for each of the M spectators.
-
-  - first (short int): status of the spectator  
-    - 0 – not yet in a queue  
-    - 1 – currently in a queue  
-    - 2 – already entered the stadium  
-  - second (int): current assigned gate number
-
-  **Why this structure?**
-  - Allows O(1) access and updates for each person using their serial number as an index.
-  - Reduces lookup time from O(MN) to O(M) by avoiding scanning queues.
-
-- **Counter Class**  
-  Tracks how many people have been processed and how many are VIPs. Helps determine loop termination and progress logic.
-
-- **Stopwatch Class**  
-  Uses high_resolution_clock to track total simulation time, mimicking real-world gate operation timings.
+Unlike the initial version, the current implementation **automatically assigns spectators to the optimal gate** based on real-time queue lengths. This removes reliance on manual user decisions and guarantees deterministic, optimal behavior.
 
 ---
 
-#### ⏱️ Time & Space Complexity
+## ✅ Key Data Structures Used
 
-- **Time Complexity:**
-  - Initialization, assignment, and gate switching: O(M)
-  - VIP check (via hash function): O(1)
-  - Queue balancing and reshuffling: O(M) in worst case
-  - Auto-dequeue (background thread): O(M) over time
+### **Array of Deques (`deque<int> Queue[N]`)
+**
+Each entry gate is represented by a separate deque.
 
-- **Space Complexity:**
-  - O(M + N)  
-    - M spectators stored in SerialStat  
-    - N dynamic deques for the entry gates
+**Why deque?**
+- O(1) insertion and deletion at both ends — ideal for queue operations  
+- Efficient front removal for gate processing  
+- Dynamic resizing without costly reallocations  
 
 ---
 
-#### 🎯 Why This Design Is Efficient
+### **Array of Pairs (`pair<short int, int> SerialStat[M]`)
+**
+Stores the state and gate assignment of each spectator.
 
-- Scales linearly with the number of spectators and gates
-- Uses multi-threading to enable real-time processing (via AutoDequeue)
-- Offers real-time suggestions for the least busy gates
-- Minimizes memory overhead while maintaining fast responsiveness
-- Provides VIP handling and queue switching with minimal cost
+- **first (status):**
+  - `0` – not yet arrived  
+  - `1` – currently waiting in a queue  
+  - `2` – already entered the stadium  
+- **second** – assigned gate number  
 
-This design ensures smooth entry for all attendees and balances speed, scalability, and real-world simulation accuracy, making it ideal for applications like stadium crowd management systems.
+**Why this structure?**
+- Enables O(1) access using serial number as index  
+- Eliminates expensive scans across all queues  
+- Simplifies state transitions (arrival → queued → entered)  
 
 ---
 
-### ⚙️ Algorithm Overview
+### **Arrival & Entry Time Arrays**
+```cpp
+arrival_time[M]
+entry_time[M]
+```
+Purpose:
 
-#### 1. Initialize Constants
-- M: Capacity of the stadium  
-- N: Number of entry gates  
-- p: Minutes it takes for one attendee to enter through any gate
+Record arrival and entry times
 
-#### 2. Stopwatch Class
-- Private member: start time of type high_resolution_clock
-- Constructor: Initializes start with current time
-- ElapsedMinutes(): Returns the elapsed time in minutes
+Compute average and maximum waiting time
 
-#### 3. HashFunction
-- Takes Serial_No as input
-- Returns 1 if Serial_No % (M/8) == 0, marking it as a VIP
+Provide measurable proof of time minimization
 
-#### 4. CreateSerialNo
-- Takes array SerialStat of pairs (short, int)
-- Sets each SerialStat[i].first to 0
-- Ends loop after initialization
+Counter Class
+Tracks:
 
-#### 5. AssignRandomGate
-- Inputs: SerialStat array and Queue array of deques
-- Randomly assigns M/2 spectators to gates
-- Ensures no VIPs and no duplicates
-- Updates SerialStat status and gate assignment
+Number of spectators who have entered
 
-#### 6. Distribute
-- Balances queue sizes across gates
-- Calculates limit = M / N
-- Moves excess spectators into reshuff vector
-- Redistributes from reshuff to underfilled queues
+Number of VIPs (who bypass queues)
 
-#### 7. CountPeopleLeft
-- Iterates over Queue array
-- Returns total number of people left in all queues
+Used to determine correct termination of the simulation.
 
-#### 8. Suggestion
-- Finds the queue(s) with minimum size
-- Calculates and displays minimum waiting time
-- Suggests all gate numbers with minimal queues
+Stopwatch Class
+Uses high_resolution_clock
 
-#### 9. Delete
-- Removes a specific Serial_No from a given Gate queue
-- Uses an iterator to erase element from the deque
+Simulates real-world time (1 second = 1 minute)
 
-#### 10. AutoDequeue
-- Runs in a loop until all spectators are processed
-- Sleeps for p minutes between dequeuing cycles
-- Pops one spectator from the back of each non-empty deque
-- Marks them as entered (SerialStat[i].first = 2)
+Provides:
 
-#### 11. Main Function Logic
-- Declares SerialStat, Queue, sr_num, queue_num, and a Counter instance
-- Initializes serial numbers and gate assignments
-- Starts the stopwatch and the AutoDequeue thread
-- Begins infinite user interaction loop:
-  - Prompts for 7-digit serial number
-  - Validates and normalizes input
-  - If valid:
-    - If not yet in queue:
-      - Check VIP status
-      - If VIP: mark as entered
-      - Else: suggest gate, accept preference, assign to chosen queue
-    - If already in a queue: allow re-selection of gate
-    - If already entered: show denial message
-  - If invalid: prompt again
-- Continues until all non-VIP spectators have entered
-- Outputs total time taken using the stopwatch
-- Ends program with return value 0
+Current simulated time
+
+Total elapsed simulation time
+
+⏱️ Time & Space Complexity
+Time Complexity
+Initialization & random assignment: O(M)
+
+Queue balancing: O(M)
+
+Auto-assignment decision: O(N) per arrival
+
+Auto-dequeue processing: O(M) over time
+
+Space Complexity
+O(M + N)
+
+M spectators tracked
+
+N independent gate queues
+
+🎯 Why This Design Is Efficient
+Guarantees optimal gate assignment (auto-allocation)
+
+Prevents suboptimal human decisions
+
+Fully thread-safe using fine-grained mutexes
+
+Supports parallel gate processing via background thread
+
+Collects real performance metrics instead of assumptions
+
+Clean separation between arrival logic and processing logic
+
+⚙️ Algorithm Overview
+1. Initialize Constants
+M – Stadium capacity
+
+N – Number of entry gates
+
+p – Time per spectator (simulated)
+
+2. VIP Identification (HashFunction)
+Marks a small fraction (~10%) of spectators as VIPs
+
+VIPs bypass queues and enter immediately
+
+Prevents VIPs from skewing queue metrics
+
+3. Initialization (CreateSerialNo)
+Initializes spectator states
+
+Records VIPs as already entered
+
+Prepares arrival and entry time arrays
+
+4. Initial Random Assignment (AssignRandomGate)
+Randomly assigns M/2 spectators to gates
+
+Models real-world pre-existing queues
+
+Avoids VIPs and duplicate assignments
+
+5. Load Balancing (Distribute)
+Redistributes spectators across gates
+
+Prevents heavily skewed queues
+
+Improves throughput and tail latency
+
+6. Optimal Gate Selection (FindBestGate)
+Selects gate with minimum queue length
+
+Implements argmin(queue_size × p)
+
+Replaces manual gate selection from earlier versions
+
+7. Auto-Dequeue Thread (AutoDequeue)
+Runs concurrently with user input
+
+Every simulated minute:
+
+One spectator enters from each gate
+
+Updates entry times and progress counters
+
+8. Main Execution Flow
+Accepts serial numbers interactively
+
+Validates serial and spectator state
+
+Displays:
+
+Estimated waiting time
+
+Recommended gate(s)
+
+Automatically assigns spectator to optimal gate
+
+Remaining spectators are auto-assigned after input ends
+
+System waits until all non-VIPs have entered
+
+📊 Output Metrics
+After simulation completion, the system reports:
+
+Average waiting time
+
+Maximum waiting time
+
+Total simulated entry time
+
+These metrics validate that the system successfully minimizes total entry time.
+
+✅ Summary of Improvements Over Initial Version
+Manual queue selection → Automatic optimal assignment
+
+No performance proof → Measured wait-time metrics
+
+Potential early termination → Correct completion guarantee
+
+Simulation-only → Optimizer-backed system
