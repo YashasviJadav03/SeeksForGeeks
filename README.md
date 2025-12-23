@@ -84,22 +84,13 @@ Current simulated time
 
 Total elapsed simulation time
 
-⏱️ Time & Space Complexity
-Time Complexity
-Initialization & random assignment: O(M)
+⏱️ **Complexity**
 
-Queue balancing: O(M)
+- **Time (worst-case):** O(M × N)
+- **Time (practical, N small):** O(M)
+- **Space:** O(M + N) ≈ O(M)
 
-Auto-assignment decision: O(N) per arrival
-
-Auto-dequeue processing: O(M) over time
-
-Space Complexity
-O(M + N)
-
-M spectators tracked
-
-N independent gate queues
+Scales linearly with the number of spectators while supporting real-time, thread-safe gate processing.
 
 🎯 Why This Design Is Efficient
 Guarantees optimal gate assignment (auto-allocation)
